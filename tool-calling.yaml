@@ -1,6 +1,6 @@
 ---
 # LLMInferenceService for tool-calling conformance
-# Model: Qwen/Qwen3-1.7B (native tool-call support, fits 16GB T4 GPUs)
+# Model: Qwen/Qwen3-4B-Instruct-2507 (agentic/tool-calling tuned, fits 16GB T4 GPUs)
 # Parser: hermes (Qwen3 tool-call format)
 # Requires: 1x GPU (16GB VRAM, e.g. NVIDIA T4)
 apiVersion: serving.kserve.io/v1alpha2
@@ -9,8 +9,8 @@ metadata:
   name: tool-calling
 spec:
   model:
-    uri: "hf://Qwen/Qwen3-1.7B"
-    name: Qwen/Qwen3-1.7B
+    uri: "hf://Qwen/Qwen3-4B-Instruct-2507"
+    name: Qwen/Qwen3-4B-Instruct-2507
   replicas: 1
   router:
     route: {}
