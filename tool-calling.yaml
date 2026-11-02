@@ -1,20 +1,25 @@
 ---
 # LLMInferenceService for tool-calling conformance
-# Model: Qwen3-Coder-30B-A3B-Instruct-FP8 (MoE, 30B total / 3B active, FP8)
-# Parser: qwen3_coder (native tool-call support)
-# Requires: 1x GPU (80GB VRAM)
+# Model: Qwen/Qwen3-1.7B (native tool-call support, fits 16GB T4 GPUs)
+# Parser: hermes (Qwen3 tool-call format)
+# Requires: 1x GPU (16GB VRAM, e.g. NVIDIA T4)
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
   name: tool-calling
 spec:
   model:
-    uri: "hf://Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
-    name: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+    uri: "hf://Qwen/Qwen3-1.7B"
+    name: Qwen/Qwen3-1.7B
   replicas: 1
   router:
     route: {}
-    scheduler: {}
+    scheduler:
+      template:
+        imagePullSecrets:
+        - name: rhai-pull-secret
+        containers:
+        - name: main
   template:
     imagePullSecrets:
     - name: rhai-pull-secret
@@ -29,6 +34,19 @@ spec:
               --enable-log-outputs
         resources:
           limits:
+            cpu: '4'
+            memory: 32Gi
             nvidia.com/gpu: "1"
           requests:
+            cpu: '2'
+            memory: 16Gi
             nvidia.com/gpu: "1"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 5
