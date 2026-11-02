@@ -26,12 +26,17 @@ spec:
     containers:
       - name: main
         env:
+          # Qwen3-4B-Instruct-2507 has a 262144-token native context; vLLM
+          # requires KV space for one full max-length sequence (~36 GiB),
+          # which a 16GB T4 cannot provide (~5 GiB free after weights).
+          # 8192 is ~6x the conformance prompts and fits with margin.
           - name: VLLM_ADDITIONAL_ARGS
             value: >-
               --enable-auto-tool-choice
               --tool-call-parser=hermes
               --enable-log-requests
               --enable-log-outputs
+              --max-model-len 8192
         resources:
           limits:
             cpu: '4'
