@@ -137,7 +137,7 @@ queues, so no Redis is involved. The documents, in apply order:
 | Resource | Description |
 |----------|-------------|
 | `LLMInferenceService` | Model under test; same shape as `single-gpu-smoke.yaml` |
-| `batch-gateway-postgres` Service + StatefulSet | Control-plane state and SQL async queues (`emptyDir`, disposable) |
+| `batch-gateway-postgres` Service + StatefulSet | Control-plane state and SQL async queues (`emptyDir`, disposable). The volume is mounted at `/var/lib/postgresql`, not at `PGDATA`: under OpenShift's random UID, `initdb` cannot `chmod` a kubelet-owned volume root and the pod crash-loops. |
 | `batch-gateway-seaweedfs` Deployment + Service | S3-compatible file storage for batch input/output files |
 | `batch-gateway-secrets` Secret | `postgresql-url`, `s3-secret-access-key`, `inference-api-key` |
 | `LLMBatchGateway` | API server, processor (`modelGateways` + `asyncConfig.sql`), GC |
@@ -145,10 +145,33 @@ queues, so no Redis is involved. The documents, in apply order:
 The test suite deletes these in reverse order, so the `LLMBatchGateway` stays
 last. `spec.processor.asyncConfig.inferenceGateway.url` routes dispatched
 requests to
-`http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/llm-conformance-test/batch-gateway-async-sql`
+`https://data-science-gateway-data-science-gateway-class.openshift-ingress.svc.cluster.local:443/llm-conformance-test/batch-gateway-async-sql`
 — adjust the namespace path segment when running with a non-default
 `--namespace`, and the Service name/namespace on clusters whose inference
 gateway is named differently.
+
+That value is platform-specific in two ways, both verified on RHOAI 3.6 with the
+AIGateway component:
+
+| Platform | Dispatch URL | TLS |
+|----------|--------------|-----|
+| RHOAI 3.6, AIGateway component | `https://data-science-gateway-<class>.<ingress-ns>.svc.cluster.local:443/<ns>/<name>` | `asyncConfig.tls.insecureSkipVerify: true` — the gateway certificate is signed by the OpenShift service CA, which the batch components do not trust |
+| Install that still exposes Istio's gateway | `http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/<ns>/<name>` | none |
+
+On 3.6 there is no `inference-gateway-istio` Service and no plain-HTTP listener
+(the gateway Service publishes only `443`/`15021`), so a `http://…:80` URL makes
+the async processor dispatch to an unresolvable host and batches never leave
+`in_progress`. Find the right host with:
+
+```bash
+kubectl get svc -A -l gateway.networking.k8s.io/gateway-name \
+  -o custom-columns=NAME:.metadata.name,NS:.metadata.namespace,PORTS:.spec.ports[*].port
+```
+
+Note also that the gateway's `allowedRoutes` selector decides whether the
+`LLMInferenceService`'s `HTTPRoute` (created in the test namespace) is accepted
+at all, and that a gateway fronted by `oauth2-proxy` answers unauthenticated
+dispatch with a `302` to OpenShift OAuth.
 
 `spec.processor.modelGateways` is keyed by the served model name and
 `inferencePoolName` must equal `<llmisvc>-inference-pool`; the suite rewrites

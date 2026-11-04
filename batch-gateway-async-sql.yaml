@@ -87,8 +87,13 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           volumeMounts:
+            # Mount the volume at the parent of PGDATA, not at PGDATA itself:
+            # OpenShift runs the container as a random UID, and initdb cannot
+            # chmod a volume root that kubelet owns, so PostgreSQL would die with
+            # "could not change permissions of directory /var/lib/postgresql/data".
+            # As a subdirectory, the data dir is created and owned by that UID.
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
       volumes:
         - name: data
           emptyDir: {}
@@ -196,10 +201,23 @@ spec:
       concurrency: 8
       drainTimeout: 2m
       resultPollTimeout: 2m
+      # Verify inference gateway TLS with insecureSkipVerify: the gateway's
+      # certificate is signed by the OpenShift service CA, which the batch
+      # components' Go binaries do not trust. This is a conformance fixture with
+      # dummy credentials; use caCertKey with a real Secret elsewhere.
+      tls:
+        insecureSkipVerify: true
       # Route to the model through the inference gateway. Update the namespace
       # path segment if you run with a non-default --namespace.
+      #
+      # RHOAI 3.6 (AIGateway component): the gateway is
+      # data-science-gateway-<class> in openshift-ingress and only serves TLS on
+      # 443. An install that still exposes Istio's inference-gateway-istio on
+      # port 80 in redhat-ods-applications uses
+      # http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/<ns>/<name>
+      # and no tls block instead.
       inferenceGateway:
-        url: http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/llm-conformance-test/batch-gateway-async-sql
+        url: https://data-science-gateway-data-science-gateway-class.openshift-ingress.svc.cluster.local:443/llm-conformance-test/batch-gateway-async-sql
       sql:
         pollIntervalMs: 1000
         batchSize: 10
