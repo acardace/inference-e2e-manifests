@@ -201,21 +201,18 @@ spec:
       concurrency: 8
       drainTimeout: 2m
       resultPollTimeout: 2m
-      # Verify inference gateway TLS with insecureSkipVerify: the gateway's
-      # certificate is signed by the OpenShift service CA, which the batch
-      # components' Go binaries do not trust. This is a conformance fixture with
-      # dummy credentials; use caCertKey with a real Secret elsewhere.
+      # Dispatch TLS. The suite forces insecureSkipVerify: true when it derives
+      # an https:// dispatch URL (port 443), because the gateway certificate is
+      # signed by the OpenShift service CA, which the batch components' Go
+      # binaries do not trust; on an http:// (port 80) gateway it leaves this
+      # block alone. This is a conformance fixture with dummy credentials; use
+      # caCertKey with a real Secret elsewhere.
       tls:
         insecureSkipVerify: true
-      # Route to the model through the inference gateway. Update the namespace
-      # path segment if you run with a non-default --namespace.
-      #
-      # RHOAI 3.6 (AIGateway component): the gateway is
-      # data-science-gateway-<class> in openshift-ingress and only serves TLS on
-      # 443. An install that still exposes Istio's inference-gateway-istio on
-      # port 80 in redhat-ods-applications uses
-      # http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/<ns>/<name>
-      # and no tls block instead.
+      # Route to the model through the inference gateway. The suite rewrites
+      # this (and any queuesConfig[].igwBaseURL) at deploy time from the gateway
+      # Service it discovers, using https + insecureSkipVerify on port 443 and
+      # http on port 80, so this value is only a placeholder for a manual apply.
       inferenceGateway:
         url: https://data-science-gateway-data-science-gateway-class.openshift-ingress.svc.cluster.local:443/llm-conformance-test/batch-gateway-async-sql
       sql:
