@@ -1,0 +1,217 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: batch-gateway-async-sql
+spec:
+  model:
+    uri: hf://Qwen/Qwen3-0.6B
+    name: Qwen/Qwen3-0.6B
+  replicas: 1
+  router:
+    scheduler:
+      template:
+        imagePullSecrets:
+          - name: rhai-pull-secret
+        containers:
+          - name: main
+    route: {}
+    gateway: {}
+  template:
+    imagePullSecrets:
+      - name: rhai-pull-secret
+    containers:
+      - name: main
+        resources:
+          limits:
+            cpu: "2"
+            memory: 8Gi
+            nvidia.com/gpu: "1"
+          requests:
+            cpu: "1"
+            memory: 4Gi
+            nvidia.com/gpu: "1"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 5
+---
+# PostgreSQL: batch control-plane state + SQL async queues.
+# emptyDir keeps the example runnable without a StorageClass.
+apiVersion: v1
+kind: Service
+metadata:
+  name: batch-gateway-postgres
+  labels:
+    app: batch-gateway-postgres
+spec:
+  selector:
+    app: batch-gateway-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: batch-gateway-postgres
+spec:
+  serviceName: batch-gateway-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: batch-gateway-postgres
+  template:
+    metadata:
+      labels:
+        app: batch-gateway-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:16-alpine
+          env:
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: batch
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "batch"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# S3-compatible file storage (SeaweedFS).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: batch-gateway-seaweedfs
+  labels:
+    app: batch-gateway-seaweedfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: batch-gateway-seaweedfs
+  template:
+    metadata:
+      labels:
+        app: batch-gateway-seaweedfs
+    spec:
+      containers:
+        - name: seaweedfs
+          image: docker.io/chrislusf/seaweedfs:4.48
+          args:
+            - server
+            - -dir=/data
+            - -ip.bind=0.0.0.0
+            - -s3
+            - -s3.port=8333
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: batch-gateway
+            - name: AWS_SECRET_ACCESS_KEY
+              value: batch-gateway-secret
+          ports:
+            - name: s3
+              containerPort: 8333
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: batch-gateway-seaweedfs
+  labels:
+    app: batch-gateway-seaweedfs
+spec:
+  selector:
+    app: batch-gateway-seaweedfs
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: 8333
+---
+# Credentials the operator mounts into every batch-gateway component.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: batch-gateway-secrets
+type: Opaque
+stringData:
+  postgresql-url: postgresql://postgres:postgres@batch-gateway-postgres:5432/batch?sslmode=disable
+  s3-secret-access-key: batch-gateway-secret
+  inference-api-key: dummy-api-key
+---
+# Batch gateway. Named after the test case so the API server Service is
+# batch-gateway-async-sql-apiserver:8000.
+apiVersion: batch.llm-d.ai/v1alpha1
+kind: LLMBatchGateway
+metadata:
+  name: batch-gateway-async-sql
+spec:
+  secretRef:
+    name: batch-gateway-secrets
+  dbBackend: postgresql
+  fileStorage:
+    s3:
+      bucket: batch-gateway
+      region: us-east-1
+      endpoint: http://batch-gateway-seaweedfs:8333
+      accessKeyId: batch-gateway
+      usePathStyle: true
+      autoCreateBucket: true
+  apiServer:
+    replicas: 1
+  processor:
+    replicas: 1
+    config:
+      progressUpdateInterval: 15s
+    # Keyed by served model name; the pool name comes from the LLMInferenceService.
+    modelGateways:
+      "Qwen/Qwen3-0.6B":
+        inferencePoolName: batch-gateway-async-sql-inference-pool
+    asyncConfig:
+      concurrency: 8
+      drainTimeout: 2m
+      resultPollTimeout: 2m
+      # Route to the model through the inference gateway. Update the namespace
+      # path segment if you run with a non-default --namespace.
+      inferenceGateway:
+        url: http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/llm-conformance-test/batch-gateway-async-sql
+      sql:
+        pollIntervalMs: 1000
+        batchSize: 10
+        maxConnections: 8
+        # One queue per model gateway; the name must match the queue the
+        # processor publishes to (llm-d-async:requests:<inferencePoolName>).
+        queuesConfig:
+          - name: llm-d-async:requests:batch-gateway-async-sql-inference-pool
+            workerPoolID: default
+      workerPools:
+        - name: default
+          workers: 4
+  gc:
+    replicas: 1
+    interval: 30m

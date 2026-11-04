@@ -109,6 +109,7 @@ In 3.4 this was a single `precise-prefix-cache-scorer` plugin.
 | `lora-single.yaml` | Single LoRA adapter (HF) | template + stubs |
 | `lora-multi.yaml` | Multiple LoRA adapters with maxRank/maxAdapters | template + stubs |
 | `maas-single-gpu.yaml` | `single-gpu` served through MaaS (see below) | template + stubs |
+| `batch-gateway-async-sql.yaml` | `LLMInferenceService` + `LLMBatchGateway`, async batches over PostgreSQL (see below) | template + stubs |
 
 ### MaaS (RHOAI 3.5)
 
@@ -125,3 +126,38 @@ routes on the MaaS gateway), plus:
 The policy and subscription reference the model in `llm-conformance-test`. The
 cluster must have the RHOAI 3.5 MaaS components (RHCL/Kuadrant, `maas-api`) and
 both gateways installed.
+
+### Batch Gateway (`batch-gateway-async-sql.yaml`)
+
+One `LLMInferenceService` plus one `LLMBatchGateway` that serves the OpenAI
+Batch API (`/v1/files`, `/v1/batches`), using async dispatch over PostgreSQL SQL
+queues — Postgres holds both the control-plane state and the request/result
+queues, so no Redis is involved. The documents, in apply order:
+
+| Resource | Description |
+|----------|-------------|
+| `LLMInferenceService` | Model under test; same shape as `single-gpu-smoke.yaml` |
+| `batch-gateway-postgres` Service + StatefulSet | Control-plane state and SQL async queues (`emptyDir`, disposable) |
+| `batch-gateway-seaweedfs` Deployment + Service | S3-compatible file storage for batch input/output files |
+| `batch-gateway-secrets` Secret | `postgresql-url`, `s3-secret-access-key`, `inference-api-key` |
+| `LLMBatchGateway` | API server, processor (`modelGateways` + `asyncConfig.sql`), GC |
+
+The test suite deletes these in reverse order, so the `LLMBatchGateway` stays
+last. `spec.processor.asyncConfig.inferenceGateway.url` routes dispatched
+requests to
+`http://inference-gateway-istio.redhat-ods-applications.svc.cluster.local:80/llm-conformance-test/batch-gateway-async-sql`
+— adjust the namespace path segment when running with a non-default
+`--namespace`, and the Service name/namespace on clusters whose inference
+gateway is named differently.
+
+`spec.processor.modelGateways` is keyed by the served model name and
+`inferencePoolName` must equal `<llmisvc>-inference-pool`; the suite rewrites
+`spec.model.name` from the test case (and `--model`), so the key has to match
+the name the suite deploys.
+
+Platform requirement: the `batch.llm-d.ai` CRD and the batch gateway operator
+must be enabled on the cluster
+(`spec.components.aigateway.batchGateway.managementState: Managed` on the
+`DataScienceCluster` — see the conformance suite's
+`docs/adding-a-batch-test-case.md`). Nothing beyond the backing Postgres and S3
+stores is installed by this manifest.
