@@ -109,7 +109,7 @@ In 3.4 this was a single `precise-prefix-cache-scorer` plugin.
 | `lora-single.yaml` | Single LoRA adapter (HF) | template + stubs |
 | `lora-multi.yaml` | Multiple LoRA adapters with maxRank/maxAdapters | template + stubs |
 | `maas-single-gpu.yaml` | `single-gpu` served through MaaS (see below) | template + stubs |
-| `batch-gateway-async-sql.yaml` | `LLMInferenceService` + `LLMBatchGateway`, async batches over PostgreSQL (see below) | template + stubs |
+| `batch-gateway-async-sql.yaml` | vLLM-simulator `LLMInferenceService` + `LLMBatchGateway`, async batches over PostgreSQL (see below) | template + stubs |
 
 ### MaaS (RHOAI 3.5)
 
@@ -136,7 +136,8 @@ queues, so no Redis is involved. The documents, in apply order:
 
 | Resource | Description |
 |----------|-------------|
-| `LLMInferenceService` | Model under test; same shape as `single-gpu-smoke.yaml` |
+| `LLMInferenceServiceConfig` | vLLM inference simulator (`llm-d-inference-sim` v0.12.0, the version RHOAI 3.6 ships): CPU-only, no model weights, TLS from the controller-mounted certificate |
+| `LLMInferenceService` | Model under test: the simulator, served via the config's `baseRef`; no GPU |
 | `batch-gateway-postgres` Service + StatefulSet | Control-plane state and SQL async queues (`emptyDir`, disposable). The volume is mounted at `/var/lib/postgresql`, not at `PGDATA`: under OpenShift's random UID, `initdb` cannot `chmod` a kubelet-owned volume root and the pod crash-loops. |
 | `batch-gateway-seaweedfs` Deployment + Service | S3-compatible file storage for batch input/output files |
 | `batch-gateway-secrets` Secret | `postgresql-url`, `s3-secret-access-key`, `inference-api-key` |
